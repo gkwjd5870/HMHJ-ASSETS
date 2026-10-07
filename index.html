@@ -431,6 +431,14 @@ nav.tabs .wrap::-webkit-scrollbar{display:none;}
   .summary-grid,.lg-strip,.led-sum{grid-template-columns:1fr;}
   .hero-value{font-size:22px;}
 }
+.evcal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px;}
+.evcal .evh{text-align:center;font-size:11.5px;font-weight:700;color:var(--ink-soft);padding:4px 0;}
+.evc{min-height:78px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:4px;cursor:pointer;overflow:hidden;}
+.evc.empty{background:transparent;border-color:transparent;cursor:default;}
+.evc.today{border-color:var(--indigo);box-shadow:0 0 0 1.5px var(--indigo) inset;}
+.evc .d{font-size:11px;font-weight:700;color:var(--ink-soft);margin-bottom:2px;}
+.evc .chip{font-size:10.5px;font-weight:700;line-height:1.3;background:rgba(240,66,106,0.12);color:#C2255C;border-radius:6px;padding:2px 4px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+@media (max-width:520px){ .evc{min-height:62px;padding:3px;} .evc .chip{font-size:9.5px;padding:1px 3px;} }
 </style>
 </head>
 <body>
@@ -445,6 +453,7 @@ nav.tabs .wrap::-webkit-scrollbar{display:none;}
   <div class="wrap">
     <button data-tab="dashboard" class="active">머니대시보드</button>
     <button data-tab="ledger">가계부</button>
+    <button data-tab="event">경조사</button>
     <button data-tab="bank">통장관리</button>
     <button data-tab="stock">주식관리</button>
     <button data-tab="loan">대출관리</button>
@@ -455,6 +464,19 @@ nav.tabs .wrap::-webkit-scrollbar{display:none;}
 <main>
   <section id="view-dashboard" class="view active">
     <div id="dash-content"></div>
+  </section>
+
+  <section id="view-event" class="view">
+    <div class="nt-banner" style="background:linear-gradient(135deg,#F76B1C,#F0426A);">
+      <div class="icon">💐</div>
+      <h1>경조사비 · 얼마 냈더라?</h1>
+      <p>경조사에 낸 돈을 지인별로 기록해두면, 다음에 "그 분께 얼마 냈더라?" 바로 찾아볼 수 있어요.</p>
+    </div>
+    <div class="nt-tip">
+      💡 <b>Tip</b> · 가계부에서 <b>경조사 카테고리</b>로 지출을 기록하면 이 탭에도 <b>자동으로 함께</b> 기록돼요. (지출은 한 번만 입력하면 돼서 중복되지 않아요)<br>
+      💡 <b>👥 지인별</b> 탭에서 이름을 누르면 그 지인에게 낸 모든 내역을 한눈에 볼 수 있어요.
+    </div>
+    <div id="event-content"></div>
   </section>
 
   <section id="view-ledger" class="view">
@@ -790,6 +812,7 @@ function ensureStateDefaults(){
   if(!c.pivot) c.pivot = Object.assign({}, DEFAULT_LEDGER_CFG.pivot);
   if(c.weekStart===undefined) c.weekStart = 0;
   if(!c.last) c.last = {};
+  if(c.eventCategory===undefined){ const m = c.categories.find(x=>x.type==='지출' && /경조사/.test(x.name)); c.eventCategory = m ? m.name : ''; }
 }
 let state = loadState();
 ensureStateDefaults();
@@ -2333,7 +2356,7 @@ function resetAll(btn){
 ============================================================ */
 let ledgerMonth = todayYM();
 let ledgerSub = 'list';
-let ledgerFilter = {period:'month', type:'', category:'', method:'', fixedOnly:false, q:''};
+let ledgerFilter = {period:'month', type:'', category:'', method:'', fund:'', fixedOnly:false, q:''};
 let ledgerDaySel = null;
 let editingEntryId = null;
 let entryModalType = '지출';
@@ -2342,7 +2365,16 @@ let lgImportMsg = '';
 const LG_METHOD_COLORS = ['#9775FA','#4C6FFF','#12B886','#FF922B','#F0426A','#22B8CF','#6C7280'];
 const LG_WEEKDAYS = ['일','월','화','수','목','금','토'];
 const LG_SEP = '\u0001';
-const PV_DIMS = ['카테고리','수단','고정/변동','월','구분'];
+const PV_DIMS = ['카테고리','수단','고정/변동','월','구분','자금 출처'];
+const LG_FUNDS = [['공용','부부 공용'],['남편','남편 개인'],['아내','아내 개인']];
+function lgFundLabel(v){ const f = LG_FUNDS.find(x=>x[0]===v); return f ? f[1] : '(미지정)'; }
+function lgFundTag(v){
+  if(!v) return '<span style="color:var(--ink-faint);">-</span>';
+  const c = v==='공용' ? '#12B886' : v==='남편' ? '#4C6FFF' : '#B14FD9';
+  return `<span class="tag" style="background:${hexToRgba(c,0.13)};color:${c};">${lgEsc(lgFundLabel(v))}</span>`;
+}
+function lgIsEventCat(name){ const n = lgCfg().eventCategory; return !!name && !!n && name===n; }
+function lgEventList(){ return state.ledger.filter(e=>e.type==='지출' && (e.ev || lgIsEventCat(e.category))); }
 
 /* ---------- 작은 헬퍼 ---------- */
 function lgEsc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -2407,6 +2439,7 @@ function lgFiltered(){
   if(f.type) list = list.filter(e=>e.type===f.type);
   if(f.category) list = list.filter(e=>(e.category||'미분류')===f.category);
   if(f.method) list = list.filter(e=>(e.method||'')===f.method);
+  if(f.fund) list = list.filter(e=>e.type==='지출' && (e.fundSource||'')===(f.fund==='__none__' ? '' : f.fund));
   if(f.fixedOnly) list = list.filter(e=>e.fixed);
   if(f.q){ const q = f.q.toLowerCase(); list = list.filter(e=>(e.title||'').toLowerCase().includes(q)); }
   list.sort((a,b)=> b.date.localeCompare(a.date) || (b.createdAt||'').localeCompare(a.createdAt||''));
@@ -2446,6 +2479,7 @@ function lgListHtml(){
     .concat([`<option value="미분류"${f.category==='미분류'?' selected':''}>미분류</option>`]).join('');
   const methOpts = ['<option value="">수단 전체</option>']
     .concat(cfg.methods.map(m=>`<option value="${lgEsc(m.name)}"${f.method===m.name?' selected':''}>${lgEsc(m.name)}</option>`)).join('');
+  const fundOpts = [['','출처 전체'],['공용','부부 공용'],['남편','남편 개인'],['아내','아내 개인'],['__none__','출처 미지정']].map(o=>`<option value="${o[0]}"${f.fund===o[0]?' selected':''}>${o[1]}</option>`).join('');
   const wr = lgWeekRange();
   return `
   <div class="lg-filters">
@@ -2462,6 +2496,7 @@ function lgListHtml(){
     </select>
     <select onchange="lgSetFilter('category',this.value)">${catOpts}</select>
     <select onchange="lgSetFilter('method',this.value)">${methOpts}</select>
+    <select onchange="lgSetFilter('fund',this.value)">${fundOpts}</select>
     <label class="chk"><input type="checkbox" ${f.fixedOnly?'checked':''} onchange="lgSetFilter('fixedOnly',this.checked)"> 📌 고정비만</label>
     <input type="search" placeholder="세부내역 검색" value="${lgEsc(f.q)}" oninput="lgSetFilter('q',this.value)">
   </div>
@@ -2493,11 +2528,12 @@ function updateLedgerTable(){
     <td class="num ${lgAmtCls(e)}">${lgAmtStr(e)}</td>
     <td style="white-space:nowrap;">${lgEsc(lgCatLabel(e.category))}</td>
     <td>${lgMethodTag(e.method)}</td>
+    <td>${e.type==='지출' ? lgFundTag(e.fundSource) : ''}</td>
     <td style="text-align:center;"><input type="checkbox" ${e.fixed?'checked':''} onchange="lgToggleFixed('${e.id}',this.checked)"></td>
     <td>${lgTypeTag(e.type)}</td>
     <td><button class="row-del" style="color:var(--ink-soft);" onclick="openEntryModal('${e.id}')">✎</button></td>
   </tr>`).join('');
-  wrap.innerHTML = `<table class="lg"><thead><tr><th>세부내역</th><th>날짜</th><th class="num">금액</th><th>카테고리</th><th>수단</th><th style="text-align:center;">고정비</th><th>구분</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+  wrap.innerHTML = `<table class="lg"><thead><tr><th>세부내역</th><th>날짜</th><th class="num">금액</th><th>카테고리</th><th>수단</th><th>자금</th><th style="text-align:center;">고정비</th><th>구분</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
     + (list.length>500 ? `<div style="padding:10px 14px;font-size:12px;color:var(--ink-soft);">최근 500건만 표시했어요. 필터로 범위를 좁혀주세요.</div>` : '');
 }
 function lgToggleFixed(id, v){
@@ -2900,6 +2936,8 @@ function lgSummaryHtml(){
   const cardSav = lgBreakdownCard('🏦 저축 · 투자 · 상환', savs, prevSavs, e=>e.category||'미분류', catLabel, '#4C6FFF', 'inc');
   const methLabel = k => k ? lgMethodTag(k) : '<span style="color:var(--ink-faint);">(수단 없음)</span>';
   const cardMeth = lgBreakdownCard('💳 결제 수단별 지출', exps, prevExps, e=>e.method||'', methLabel, '#4C6FFF', 'exp');
+  const fundLabel = k => k ? lgFundTag(k) : '<span style="color:var(--ink-faint);">(미지정)</span>';
+  const cardFund = lgBreakdownCard('🪙 자금 출처별 지출 (공용 / 개인)', exps, prevExps, e=>e.fundSource||'', fundLabel, '#12B886', 'exp');
   const cardFix = lgBreakdownCard('📌 고정비 vs 변동비', exps, null, e=>e.fixed?'고정비':'변동비', k=>lgEsc(k), '#9775FA', 'exp');
 
   const top = exps.slice().sort((a,b)=>b.amount-a.amount).slice(0,5);
@@ -2918,7 +2956,7 @@ function lgSummaryHtml(){
   }
   const cardTrend = `<div class="lg-card"><h3>📈 최근 6개월 추이</h3><div class="lg-scroll"><table class="lg"><thead><tr><th>월</th><th class="num">수입</th><th class="num">지출</th><th class="num">저축투자상환</th><th class="num">잔액</th><th class="num">잔액률</th></tr></thead><tbody>${trendRows.join('')}</tbody></table></div></div>`;
 
-  return cards + cardCat + cardInc + cardSav + cardMeth + cardFix + cardTop + cardTrend;
+  return cards + cardCat + cardInc + cardSav + cardMeth + cardFund + cardFix + cardTop + cardTrend;
 }
 
 /* ---------- 일별 (달력 + 표) ---------- */
@@ -2987,6 +3025,7 @@ function lgPivotDim(e, dim){
     case '고정/변동': return e.fixed ? '고정비' : '변동비';
     case '월': return e.date.slice(0,7);
     case '구분': return e.type;
+    case '자금 출처': return lgFundLabel(e.fundSource||'');
     default: return '합계';
   }
 }
@@ -3103,6 +3142,7 @@ function lgFillEntryCats(sel){
   if(sel && !cats.some(c=>c.name===sel)) opts.unshift(`<option value="${lgEsc(sel)}">${lgEsc(sel)}</option>`);
   el.innerHTML = `<option value="">(미분류)</option>` + opts.join('') + `<option value="__new__">＋ 새 카테고리 추가…</option>`;
   el.value = sel || ''; el.dataset.prev = el.value;
+  try{ lgEvToggle(); }catch(e){}
 }
 function lgFillEntryMethods(sel){
   const el = document.getElementById('en-method'); if(!el) return;
@@ -3118,6 +3158,7 @@ function lgEntryCatChange(el){
     box.style.display = 'flex';
     const inp = document.getElementById('en-cat-name'); inp.value = ''; inp.focus();
   } else { box.style.display = 'none'; el.dataset.prev = el.value; }
+  lgEvToggle();
 }
 function lgEntryCatAdd(){
   const name = document.getElementById('en-cat-name').value.trim();
@@ -3159,11 +3200,11 @@ function lgEntryType(t){
   const last = lgCfg().last || {};
   lgFillEntryCats((last.cat && last.cat[t]) || '');
 }
-function openEntryModal(id, presetDate){
+function openEntryModal(id, presetDate, presetCat){
   editingEntryId = id || null;
   const e = id ? state.ledger.find(x=>x.id===id) : null;
   const last = lgCfg().last || {};
-  entryModalType = e ? e.type : (last.type || '지출');
+  entryModalType = e ? e.type : (presetCat ? '지출' : (last.type || '지출'));
   const date = e ? e.date : (presetDate || (ledgerSub==='daily' && ledgerDaySel ? ledgerDaySel : todayISODate()));
   document.getElementById('modal-content').innerHTML = `
     <button class="close-x" onclick="closeOverlay()">✕</button>
@@ -3192,6 +3233,18 @@ function openEntryModal(id, presetDate){
           <button class="primary" type="button" onclick="lgEntryMethodAdd()">추가</button>
           <button class="ghost" type="button" onclick="lgEntryMethodCancel()">취소</button>
         </div>
+        <div class="field full" id="en-fund-wrap"><label>자금 출처 <span style="font-weight:400;color:var(--ink-faint);">(개인 돈인지, 부부 공용돈인지)</span></label>
+          <select id="en-fund"><option value="">(미지정)</option><option value="공용">🏠 부부 공용돈</option><option value="남편">🙋‍♂️ 남편 개인 자금</option><option value="아내">🙋‍♀️ 아내 개인 자금</option></select></div>
+        <div id="en-ev" class="stk-box" style="grid-column:1/-1;display:none;">
+          <div class="stk-h">💐 경조사 정보 <span style="font-weight:500;font-size:11.5px;color:var(--ink-soft);">· 경조사 탭에 함께 기록돼요</span></div>
+          <div class="form-grid" style="margin-top:10px;">
+            <div class="field"><label>나의 지인</label><input type="text" id="en-ev-person" list="dl-ev-person" placeholder="이름" value="${e&&e.ev?lgEsc(e.ev.person||''):''}" onchange="lgEvPersonPick(this)"></div>
+            <div class="field"><label>나와의 관계</label><input type="text" id="en-ev-relation" list="dl-ev-relation" placeholder="예: 친구, 협력사" value="${e&&e.ev?lgEsc(e.ev.relation||''):''}"></div>
+            <div class="field"><label>대상자</label><input type="text" id="en-ev-target" list="dl-ev-target" placeholder="예: 본인, 모친" value="${e&&e.ev?lgEsc(e.ev.target||''):''}"></div>
+            <div class="field"><label>경조사 구분</label><input type="text" id="en-ev-kind" list="dl-ev-kind" placeholder="예: 결혼식, 장례식" value="${e&&e.ev?lgEsc(e.ev.kind||''):''}"></div>
+          </div>
+          ${evDatalists()}
+        </div>
         <div class="field full"><label>메모 <span style="font-weight:400;color:var(--ink-faint);">(선택)</span></label><textarea id="en-memo" placeholder="추가로 남기고 싶은 내용" style="width:100%;min-height:60px;padding:9px 11px;border:1px solid var(--border);border-radius:12px;font-size:13.5px;font-family:'Pretendard',sans-serif;background:var(--bg);color:var(--ink);resize:vertical;">${e&&e.memo?lgEsc(e.memo):''}</textarea></div>
         <div class="field full" style="margin:-4px 0 0;"><a href="#" onclick="lgOpenSettings();return false;" style="font-size:12px;font-weight:700;color:var(--indigo);text-decoration:none;">⚙️ 카테고리 · 수단 수정/삭제하러 가기 ›</a></div>
         <div class="field full"><label class="chk" style="font-size:13px;font-weight:600;color:var(--ink);"><input type="checkbox" id="en-fixed" ${e&&e.fixed?'checked':''} style="width:auto;"> 📌 고정비 (매달 반복되는 지출)</label></div>
@@ -3203,8 +3256,10 @@ function openEntryModal(id, presetDate){
       </div>
     </div>`;
   document.querySelectorAll('#en-type button').forEach(b=>b.classList.toggle('active', b.dataset.t===entryModalType));
-  lgFillEntryCats(e ? e.category : ((last.cat && last.cat[entryModalType]) || ''));
+  lgFillEntryCats(e ? e.category : (presetCat || ((last.cat && last.cat[entryModalType]) || '')));
   lgFillEntryMethods(e ? e.method : (last.method || ''));
+  const fundEl = document.getElementById('en-fund'); if(fundEl) fundEl.value = e ? (e.fundSource||'') : (last.fund||'');
+  lgEvToggle();
   document.getElementById('overlay').classList.add('active');
   if(!e) setTimeout(()=>{ const t = document.getElementById('en-title'); if(t) t.focus(); }, 60);
 }
@@ -3218,17 +3273,28 @@ function lgSaveEntry(keepAdding){
   if(!(amount>0)){ toast('금액을 입력해주세요'); return; }
   let category = document.getElementById('en-cat').value; if(category==='__new__') category = '';
   let method = document.getElementById('en-method').value; if(method==='__new__') method = '';
-  const title = document.getElementById('en-title').value.trim() || category || entryModalType;
+  const isExp = entryModalType==='지출';
+  const fundSource = isExp ? (document.getElementById('en-fund') || {value:''}).value : '';
+  let ev = null;
+  if(isExp && lgIsEventCat(category)){
+    const g = id => ((document.getElementById(id) || {value:''}).value || '').trim();
+    ev = {person:g('en-ev-person'), relation:g('en-ev-relation'), target:g('en-ev-target'), kind:g('en-ev-kind')};
+    if(!ev.person && !ev.relation && !ev.target && !ev.kind) ev = null;
+  }
+  let title = document.getElementById('en-title').value.trim();
+  if(!title) title = (ev && (ev.person || ev.kind)) ? [ev.person, ev.kind].filter(Boolean).join(' ') : (category || entryModalType);
   const fixed = document.getElementById('en-fixed').checked;
   const memo = document.getElementById('en-memo').value.trim();
   const data = {date, title, amount:Math.abs(amount), type:entryModalType, category, method, fixed, memo};
+  if(fundSource) data.fundSource = fundSource;
+  if(ev) data.ev = ev;
   if(editingEntryId){
     const ex = state.ledger.find(x=>x.id===editingEntryId);
-    if(ex) Object.assign(ex, data, {updatedAt:nowISO()});
+    if(ex){ Object.assign(ex, data, {updatedAt:nowISO()}); if(!fundSource) delete ex.fundSource; if(!ev) delete ex.ev; }
   } else {
     state.ledger.push(Object.assign({id:uid(), createdAt:nowISO(), updatedAt:nowISO()}, data));
   }
-  const cfg = lgCfg(); cfg.last = cfg.last || {}; cfg.last.type = entryModalType; cfg.last.method = method;
+  const cfg = lgCfg(); cfg.last = cfg.last || {}; cfg.last.type = entryModalType; cfg.last.method = method; if(isExp) cfg.last.fund = fundSource;
   cfg.last.cat = cfg.last.cat || {}; cfg.last.cat[entryModalType] = category;
   saveState();
   if(date.slice(0,7)!==ledgerMonth && ledgerFilter.period==='month') ledgerMonth = date.slice(0,7);
@@ -3284,6 +3350,10 @@ function lgSettingsHtml(){
     </div>`).join('');
   return `
   <div style="font-size:12.5px;color:var(--ink-soft);margin:0 0 10px;line-height:1.65;">✏️ 이름·이모지·색은 칸을 직접 고치면 저장돼요.<br>🗑는 한 번 누르면 빨간 "정말 삭제?"로 바뀌고, 한 번 더 누르면 삭제돼요. (이미 입력한 내역은 삭제되지 않고 '미분류' 또는 '수단 없음'으로 바뀌어요.)</div>
+  <div class="lg-card"><h3>💐 경조사 탭</h3>
+    <div style="font-size:12.5px;color:var(--ink-soft);line-height:1.65;margin-bottom:10px;">여기서 고른 <b>지출 카테고리</b>로 내역을 기록하면 <b>💐 경조사 탭</b>에도 함께 나와요. (지인·관계·대상자·구분도 같이 적을 수 있어요)</div>
+    <select onchange="lgSetEventCat(this.value)" style="${inp}width:100%;"><option value="">(선택 안 함)</option>${cfg.categories.filter(c=>c.type==='지출').map(c=>`<option value="${lgEsc(c.name)}"${cfg.eventCategory===c.name?' selected':''}>${lgEsc(c.emoji)} ${lgEsc(c.name)}</option>`).join('')}</select>
+  </div>
   <div class="lg-card"><h3>💳 지출 카테고리</h3><div class="acc-list" style="margin-bottom:0;">${catRows('지출')||'<div style="font-size:13px;color:var(--ink-soft);">없음</div>'}</div></div>
   <div class="lg-card"><h3>💵 수입 카테고리</h3><div class="acc-list" style="margin-bottom:0;">${catRows('수입')||'<div style="font-size:13px;color:var(--ink-soft);">없음</div>'}</div></div>
   <div class="lg-card"><h3>🏦 저축 · 투자 · 상환 카테고리</h3><div class="acc-list" style="margin-bottom:0;">${catRows('저축투자상환')||'<div style="font-size:13px;color:var(--ink-soft);">없음</div>'}</div></div>
@@ -3331,6 +3401,7 @@ function lgCatUpdate(i, key, val){
       state.ledger.forEach(e=>{ if(e.category===c.name) e.category = nn; });
       if(ledgerFilter.category===c.name) ledgerFilter.category = nn;
       Object.keys((cfg.last && cfg.last.cat) || {}).forEach(t=>{ if(cfg.last.cat[t]===c.name) cfg.last.cat[t] = nn; });
+      if(cfg.eventCategory===c.name) cfg.eventCategory = nn;
       c.name = nn;
     }
   }
@@ -3342,6 +3413,7 @@ function lgCatDelete(i, btn){
   lgArm(btn, n ? `정말 삭제? (${n}건 미분류로)` : '정말 삭제?', ()=>{
     state.ledger.forEach(e=>{ if(e.category===c.name) e.category = ''; });
     if(ledgerFilter.category===c.name) ledgerFilter.category = '';
+    if(cfg.eventCategory===c.name) cfg.eventCategory = '';
     cfg.categories.splice(i,1); saveState(); toast('삭제했어요'); renderLedger();
   });
 }
@@ -3433,6 +3505,11 @@ function lgImportCSVText(text){
   const iFixed = find(['고정비','Fixed']);
   const iType = find(['구분','Type','유형']);
   const iMemo = find(['메모','비고','Memo','Note']);
+  const iFund = find(['자금출처','자금 출처','Fund']);
+  const iPerson = find(['지인','나의 지인','Person']);
+  const iRel = find(['관계','나와의 관계','Relation']);
+  const iTarget = find(['대상자','Target']);
+  const iKind = find(['경조사구분','경조사 구분','Event']);
   if(iDate<0 || iAmt<0){ lgImportMsg = '날짜/금액 열을 찾지 못했어요.\n인식된 열: '+header.join(', '); toast('열을 찾지 못했어요'); renderLedger(); return; }
   takeSnapshot('CSV 가져오기 전');
   const cfg = lgCfg();
@@ -3451,12 +3528,19 @@ function lgImportCSVText(text){
     const title = (iTitle>=0 ? String(r[iTitle]||'').trim() : '') || category || type;
     const fixed = iFixed>=0 ? /^(yes|true|y|1|✓|✔|예|checked)$/i.test(String(r[iFixed]||'').trim()) : false;
     const memo = iMemo>=0 ? String(r[iMemo]||'').trim() : '';
+    const rawFund = iFund>=0 ? String(r[iFund]||'') : '';
+    const fundSource = type!=='지출' ? '' : /남편/.test(rawFund) ? '남편' : /아내|와이프/.test(rawFund) ? '아내' : /공용|부부/.test(rawFund) ? '공용' : '';
+    const gv = i => i>=0 ? String(r[i]||'').trim() : '';
+    const ev = (type==='지출' && (gv(iPerson)||gv(iRel)||gv(iTarget)||gv(iKind))) ? {person:gv(iPerson), relation:gv(iRel), target:gv(iTarget), kind:gv(iKind)} : null;
     const amount = Math.abs(amt);
     const k = keyOf(date,title,amount,type,method);
     if((existing.get(k)||0)>0){ existing.set(k, existing.get(k)-1); dup++; return; }
     if(category && !lgCat(category)){ cfg.categories.push({name:category, emoji: lgDefaultEmoji(type), type}); newCats++; }
     if(method && !lgMethod(method)){ cfg.methods.push({name:method, color: LG_METHOD_COLORS[cfg.methods.length % LG_METHOD_COLORS.length]}); newMethods++; }
-    state.ledger.push({id:uid(), date, title, amount, type, category, method, fixed, memo, createdAt:nowISO(), updatedAt:nowISO()});
+    const item = {id:uid(), date, title, amount, type, category, method, fixed, memo, createdAt:nowISO(), updatedAt:nowISO()};
+    if(fundSource) item.fundSource = fundSource;
+    if(ev) item.ev = ev;
+    state.ledger.push(item);
     added++;
   });
   lgImportMsg = `가져오기 완료\n· 새로 추가: ${added}건\n· 중복이라 건너뜀: ${dup}건\n· 읽지 못한 줄: ${bad}건\n· 새 카테고리 ${newCats}개, 새 수단 ${newMethods}개`;
@@ -3470,9 +3554,9 @@ function lgImportFile(input){
 }
 function lgCSVString(){
   const cell = v => '"'+String(v==null?'':v).replace(/"/g,'""')+'"';
-  const rows = [['세부내역','날짜','금액','카테고리','수단','고정비','구분','메모']];
+  const rows = [['세부내역','날짜','금액','카테고리','수단','고정비','구분','메모','자금출처','지인','관계','대상자','경조사구분']];
   state.ledger.slice().sort((a,b)=>a.date.localeCompare(b.date) || (a.createdAt||'').localeCompare(b.createdAt||''))
-    .forEach(e=>rows.push([e.title, e.date, e.amount, e.category||'', e.method||'', e.fixed?'Yes':'No', e.type, e.memo||'']));
+    .forEach(e=>rows.push([e.title, e.date, e.amount, e.category||'', e.method||'', e.fixed?'Yes':'No', e.type, e.memo||'', e.fundSource?lgFundLabel(e.fundSource):'', e.ev?e.ev.person||'':'', e.ev?e.ev.relation||'':'', e.ev?e.ev.target||'':'', e.ev?e.ev.kind||'':'']));
   return rows.map(r=>r.map(cell).join(',')).join('\n');
 }
 function lgExportCSV(){
@@ -4093,6 +4177,180 @@ function loadFromServer(){
     .getState();
 }
 
+/* ============================================================
+   💐 경조사 탭 (가계부의 경조사 카테고리 지출을 지인별로 모아 봄)
+============================================================ */
+const EV_DEFAULTS = {
+  relation:['가족','친척','친구','직장동료','협력사','이웃','지인'],
+  target:['본인','배우자','부모','모친','부친','자녀','형제자매','기타'],
+  kind:['결혼식','장례식','돌잔치','생일','집들이','병문안','출산','개업','기타']
+};
+let evSub = 'table', evMonth = todayYM();
+const evFilter = {q:'', kind:'', relation:'', year:'', fund:''};
+function evValues(field){
+  const set = new Set(EV_DEFAULTS[field] || []);
+  state.ledger.forEach(e=>{ if(e.ev && e.ev[field]) set.add(e.ev[field]); });
+  return Array.from(set);
+}
+function evPeople(){
+  const set = new Set(); state.ledger.forEach(e=>{ if(e.ev && e.ev.person) set.add(e.ev.person); });
+  return Array.from(set).sort();
+}
+function evDatalists(){
+  const dl = (id, arr) => `<datalist id="${id}">${arr.map(v=>`<option value="${lgEsc(v)}">`).join('')}</datalist>`;
+  return dl('dl-ev-person', evPeople()) + dl('dl-ev-relation', evValues('relation')) + dl('dl-ev-target', evValues('target')) + dl('dl-ev-kind', evValues('kind'));
+}
+function lgEvToggle(){
+  const exp = entryModalType==='지출';
+  const fw = document.getElementById('en-fund-wrap'); if(fw) fw.style.display = exp ? '' : 'none';
+  const box = document.getElementById('en-ev'), cat = document.getElementById('en-cat');
+  if(box) box.style.display = (exp && cat && lgIsEventCat(cat.value)) ? '' : 'none';
+}
+function lgEvPersonPick(inp){
+  const name = inp.value.trim(); if(!name) return;
+  const prev = state.ledger.filter(e=>e.ev && e.ev.person===name).sort((a,b)=>b.date.localeCompare(a.date))[0];
+  if(!prev) return;
+  const rel = document.getElementById('en-ev-relation'); if(rel && !rel.value.trim() && prev.ev.relation) rel.value = prev.ev.relation;
+}
+function lgSetEventCat(v){ lgCfg().eventCategory = v; saveState(); toast(v ? '경조사 카테고리를 바꿨어요' : '경조사 카테고리를 해제했어요'); renderAll(); }
+
+function evFiltered(opts){
+  opts = opts || {};
+  let list = lgEventList(); const f = evFilter;
+  if(f.year && !opts.noYear) list = list.filter(e=>e.date.slice(0,4)===f.year);
+  if(f.kind) list = list.filter(e=>(e.ev && e.ev.kind)===f.kind);
+  if(f.relation) list = list.filter(e=>(e.ev && e.ev.relation)===f.relation);
+  if(f.fund) list = list.filter(e=>(e.fundSource||'')===(f.fund==='__none__' ? '' : f.fund));
+  if(f.q){
+    const q = f.q.toLowerCase();
+    list = list.filter(e=>[e.title, e.memo, e.ev&&e.ev.person, e.ev&&e.ev.relation, e.ev&&e.ev.target, e.ev&&e.ev.kind].join(' ').toLowerCase().includes(q));
+  }
+  list.sort((a,b)=>b.date.localeCompare(a.date) || (b.createdAt||'').localeCompare(a.createdAt||''));
+  return list;
+}
+function evShort(n){ return n>=10000 ? (Math.round(n/1000)/10)+'만' : String(n); }
+function evSetSub(v){ evSub = v; renderEvents(); }
+function evSetFilter(k, v){ evFilter[k] = v; if(k==='q') evUpdateBody(); else renderEvents(); }
+function evNew(date){ openEntryModal(null, date || todayISODate(), lgCfg().eventCategory); }
+function evPickPerson(name){ evFilter.q = name; evSub = 'table'; renderEvents(); }
+function evMonthMove(d){ evMonth = ymFromAbs(ymToAbs(evMonth)+d); evUpdateBody(); }
+function evSetupCategory(name){
+  const cfg = lgCfg();
+  if(name==='__create__'){
+    if(!cfg.categories.some(c=>c.name==='경조사비')) cfg.categories.push({name:'경조사비', emoji:'💐', type:'지출'});
+    name = '경조사비';
+  }
+  cfg.eventCategory = name; saveState(); toast('경조사 카테고리를 정했어요'); renderAll();
+}
+
+function evTableHtml(list){
+  if(!list.length) return `<div style="text-align:center;padding:34px 16px;color:var(--ink-soft);font-size:13px;line-height:1.7;">조건에 맞는 경조사 내역이 없어요.<br><button class="primary" style="margin-top:12px;" onclick="evNew()">+ 새로 만들기</button></div>`;
+  const rows = list.slice(0,500).map(e=>{
+    const ev = e.ev || {};
+    return `<tr>
+      <td class="lg-title" onclick="openEntryModal('${e.id}')">${lgEsc(ev.person || e.title)}${ev.person?'':'<div class="lg-memo">(지인 이름 없음)</div>'}</td>
+      <td>${ev.relation?`<span class="tag" style="background:var(--bg);color:var(--ink-soft);">${lgEsc(ev.relation)}</span>`:'<span style="color:var(--ink-faint);">-</span>'}</td>
+      <td style="white-space:nowrap;">${lgEsc(ev.target||'')}</td>
+      <td>${ev.kind?`<span class="tag" style="background:rgba(240,66,106,0.1);color:#F0426A;">${lgEsc(ev.kind)}</span>`:'<span style="color:var(--ink-faint);">-</span>'}</td>
+      <td style="white-space:nowrap;color:var(--ink-soft);">${e.date.replace(/-/g,'/')}</td>
+      <td class="num" style="font-weight:800;">${fmtMoney(e.amount,'KRW')}</td>
+      <td>${lgFundTag(e.fundSource)}</td>
+      <td><div class="lg-memo" style="margin:0;max-width:220px;">${lgEsc(e.memo||'')}</div></td>
+      <td><button class="row-del" style="color:var(--ink-soft);" onclick="openEntryModal('${e.id}')">✎</button></td></tr>`;
+  }).join('');
+  return `<div class="lg-tablebox"><div class="lg-scroll"><table class="lg"><thead><tr><th>나의 지인</th><th>나와의 관계</th><th>대상자</th><th>경조사 구분</th><th>날짜</th><th class="num">지출액</th><th>자금</th><th>비고</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`
+    + (list.length>500 ? `<div style="padding:10px 14px;font-size:12px;color:var(--ink-soft);">최근 500건만 표시했어요. 필터로 범위를 좁혀주세요.</div>` : '');
+}
+function evPeopleHtml(list){
+  const map = new Map();
+  list.forEach(e=>{
+    const name = (e.ev && e.ev.person) || '(이름 없음)';
+    const o = map.get(name) || {name, count:0, total:0, last:'', relation:'', kinds:{}};
+    o.count++; o.total += e.amount;
+    if(e.date>=o.last){ o.last = e.date; if(e.ev && e.ev.relation) o.relation = e.ev.relation; }
+    const k = (e.ev && e.ev.kind) || '기타'; o.kinds[k] = (o.kinds[k]||0)+1;
+    map.set(name,o);
+  });
+  const arr = Array.from(map.values()).sort((a,b)=>b.total-a.total);
+  if(!arr.length) return `<div style="text-align:center;padding:34px 16px;color:var(--ink-soft);font-size:13px;">아직 경조사 내역이 없어요.</div>`;
+  const rows = arr.map(o=>`<tr style="cursor:pointer;" onclick="evPickPerson('${lgEsc(o.name).replace(/'/g,'&#39;')}')">
+    <td style="font-weight:700;">${lgEsc(o.name)}</td>
+    <td>${o.relation?`<span class="tag" style="background:var(--bg);color:var(--ink-soft);">${lgEsc(o.relation)}</span>`:'<span style="color:var(--ink-faint);">-</span>'}</td>
+    <td class="num">${o.count}회</td><td class="num" style="font-weight:800;">${fmtMoney(o.total,'KRW')}</td>
+    <td style="white-space:nowrap;color:var(--ink-soft);">${o.last.replace(/-/g,'/')}</td>
+    <td style="color:var(--ink-soft);font-size:12px;">${Object.keys(o.kinds).map(k=>lgEsc(k)+' '+o.kinds[k]).join(' · ')}</td></tr>`).join('');
+  return `<div style="font-size:12px;color:var(--ink-soft);margin:0 0 8px;">지인 이름을 누르면 그 분께 낸 내역만 모아서 볼 수 있어요.</div>
+    <div class="lg-tablebox"><div class="lg-scroll"><table class="lg"><thead><tr><th>나의 지인</th><th>관계</th><th class="num">횟수</th><th class="num">총 지출액</th><th>최근 날짜</th><th>경조사 구분</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+}
+function evCalHtml(list){
+  const ym = evMonth, ws = lgWeekStart(); const [y,m] = ym.split('-').map(Number);
+  const dim = lgDim(ym), lead = (new Date(y,m-1,1).getDay() - ws + 7) % 7;
+  const monthList = list.filter(e=>e.date.slice(0,7)===ym);
+  const total = monthList.reduce((t,e)=>t+e.amount,0);
+  const heads = Array.from({length:7},(_,i)=>`<div class="evh">${LG_WEEKDAYS[(i+ws)%7]}</div>`).join('');
+  let cells = ''; for(let i=0;i<lead;i++) cells += '<div class="evc empty"></div>';
+  const today = todayISODate();
+  for(let d=1; d<=dim; d++){
+    const iso = ym+'-'+lgPad(d), items = monthList.filter(e=>e.date===iso);
+    cells += `<div class="evc${iso===today?' today':''}" onclick="evNew('${iso}')"><div class="d">${d}</div>`
+      + items.map(e=>`<div class="chip" onclick="event.stopPropagation();openEntryModal('${e.id}')">${lgEsc((e.ev&&e.ev.person)||e.title)} ${evShort(e.amount)}</div>`).join('') + '</div>';
+  }
+  return `<div class="lg-month" style="margin-bottom:10px;"><button onclick="evMonthMove(-1)">‹</button><div class="lbl">${lgYmLong(ym)}</div><button onclick="evMonthMove(1)">›</button></div>
+    <div style="font-size:12.5px;color:var(--ink-soft);margin:0 0 8px;">${lgYmLong(ym)} 경조사 ${monthList.length}건 · <b style="color:var(--ink);">${fmtMoney(total,'KRW')}</b> · 날짜 칸을 누르면 그 날짜로 새로 기록해요</div>
+    <div class="evcal">${heads}${cells}</div>`;
+}
+function evBodyHtml(){
+  const all = evFiltered();
+  const total = all.reduce((t,e)=>t+e.amount,0);
+  const yr = String(new Date().getFullYear());
+  const thisYear = lgEventList().filter(e=>e.date.slice(0,4)===yr).reduce((t,e)=>t+e.amount,0);
+  const people = new Set(all.map(e=>e.ev && e.ev.person).filter(Boolean)).size;
+  const strip = `<div class="lg-strip">
+    <div class="c"><div class="l">표시 중</div><div class="v tabular">${all.length}건</div></div>
+    <div class="c"><div class="l">합계</div><div class="v tabular">${fmtMoney(total,'KRW')}</div></div>
+    <div class="c"><div class="l">올해(${yr}) 총 경조사비</div><div class="v tabular">${fmtMoney(thisYear,'KRW')}</div></div>
+    <div class="c"><div class="l">지인 수</div><div class="v tabular">${people}명</div></div></div>`;
+  if(evSub==='people') return strip + evPeopleHtml(all);
+  if(evSub==='cal') return strip + evCalHtml(evFiltered({noYear:true}));
+  return strip + evTableHtml(all);
+}
+function evUpdateBody(){ const el = document.getElementById('ev-body'); if(el) el.innerHTML = evBodyHtml(); }
+function renderEvents(){
+  const el = document.getElementById('event-content'); if(!el) return;
+  const cfg = lgCfg();
+  if(!cfg.eventCategory){
+    const cats = cfg.categories.filter(c=>c.type==='지출');
+    el.innerHTML = `<div class="lg-card"><h3>💐 경조사로 모아볼 카테고리를 정해주세요</h3>
+      <div style="font-size:12.5px;color:var(--ink-soft);line-height:1.7;margin-bottom:12px;">가계부에서 이 카테고리로 지출을 기록하면, 이 탭에도 함께 나타나고 지인·관계·구분을 같이 적을 수 있어요.</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <select id="ev-setup-cat" class="fx-in">${cats.map(c=>`<option value="${lgEsc(c.name)}">${lgEsc(c.emoji)} ${lgEsc(c.name)}</option>`).join('')}</select>
+        <button class="primary" onclick="evSetupCategory(document.getElementById('ev-setup-cat').value)">이 카테고리로 정하기</button>
+        <button class="ghost" onclick="evSetupCategory('__create__')">＋ '경조사비' 카테고리 새로 만들기</button></div></div>`
+      + (lgEventList().length ? `<div id="ev-body">${evBodyHtml()}</div>` : '');
+    return;
+  }
+  const years = Array.from(new Set(lgEventList().map(e=>e.date.slice(0,4)))).sort().reverse();
+  const opt = (arr, cur, label) => `<option value="">${label}</option>` + arr.map(v=>`<option value="${lgEsc(v)}"${cur===v?' selected':''}>${lgEsc(v)}</option>`).join('');
+  const fundOpts = [['','자금 전체'],['공용','부부 공용'],['남편','남편 개인'],['아내','아내 개인'],['__none__','미지정']].map(o=>`<option value="${o[0]}"${evFilter.fund===o[0]?' selected':''}>${o[1]}</option>`).join('');
+  el.innerHTML = `
+    <div class="lg-head" style="margin-bottom:10px;">
+      <div class="seg">
+        <button class="${evSub==='table'?'active':''}" onclick="evSetSub('table')">📋 테이블</button>
+        <button class="${evSub==='people'?'active':''}" onclick="evSetSub('people')">👥 지인별</button>
+        <button class="${evSub==='cal'?'active':''}" onclick="evSetSub('cal')">📅 캘린더</button>
+      </div>
+      <button class="primary" onclick="evNew()">+ 새로 만들기</button>
+    </div>
+    <div class="lg-filters">
+      <input type="search" placeholder="나의 지인·내용 검색" value="${lgEsc(evFilter.q)}" oninput="evSetFilter('q',this.value)">
+      <select onchange="evSetFilter('year',this.value)">${opt(years, evFilter.year, '연도 전체')}</select>
+      <select onchange="evSetFilter('kind',this.value)">${opt(evValues('kind'), evFilter.kind, '구분 전체')}</select>
+      <select onchange="evSetFilter('relation',this.value)">${opt(evValues('relation'), evFilter.relation, '관계 전체')}</select>
+      <select onchange="evSetFilter('fund',this.value)">${fundOpts}</select>
+    </div>
+    <div id="ev-body">${evBodyHtml()}</div>`;
+}
+
 /* ---------- 구글 시트 연결 (GitHub Pages 등에서 열었을 때) ---------- */
 let gasPending = null;
 function gasMsg(t, kind){
@@ -4249,11 +4507,12 @@ function switchTab(tab){
   document.getElementById(isGroup ? 'view-group' : 'view-'+tab).classList.add('active');
   if(tab==='dashboard') renderDashboard();
   if(tab==='ledger') renderLedger();
+  if(tab==='event') renderEvents();
   if(isGroup){ renderGroupHead(); renderPassbooks(); renderSheet(); renderManage(); }
   if(tab==='manage'){ renderBackupPanel(); if(isAppsScript) cloudLoadList(); }
   window.scrollTo(0,0);
 }
-function renderAll(){ renderDashboard(); renderLedger(); renderGroupHead(); renderPassbooks(); renderSheet(); renderManage(); renderBackupPanel(); }
+function renderAll(){ renderDashboard(); renderLedger(); renderEvents(); renderGroupHead(); renderPassbooks(); renderSheet(); renderManage(); renderBackupPanel(); }
 
 document.querySelectorAll('nav.tabs button').forEach(b=>b.addEventListener('click', ()=>switchTab(b.dataset.tab)));
 document.getElementById('overlay').addEventListener('click', e=>{ if(e.target.id==='overlay') tryCloseOverlay(); });
