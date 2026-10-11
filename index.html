@@ -262,6 +262,10 @@ input[type=file]{display:none;}
 .seg.big button{flex:1;padding:10px;font-size:14px;}
 .seg.big button.active.t-exp{color:#E03131;}
 .seg.big button.active.t-inc{color:#0CA678;}
+.lg tr.off td{opacity:.45;}
+.lg tr.off td.num{text-decoration:line-through;}
+.lg tr.off td:nth-child(7){opacity:1;}
+.chk.offmode{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:5px 10px;font-weight:700;}
 .chk{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--ink);cursor:pointer;}
 .lg-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-bottom:12px;}
 .lg-strip .c{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:11px 13px;}
@@ -812,6 +816,7 @@ function ensureStateDefaults(){
   if(!c.pivot) c.pivot = Object.assign({}, DEFAULT_LEDGER_CFG.pivot);
   if(c.weekStart===undefined) c.weekStart = 0;
   if(!c.last) c.last = {};
+  if(c.offMode===undefined) c.offMode = true;
   if(c.eventCategory===undefined){ const m = c.categories.find(x=>x.type==='지출' && /경조사/.test(x.name)); c.eventCategory = m ? m.name : ''; }
 }
 let state = loadState();
@@ -2420,16 +2425,19 @@ function lgTypeTag(t){
   const ic = t==='수입' ? '💵' : t==='저축투자상환' ? '🏦' : '💳';
   return `<span class="tag ${cls}">${ic} ${lgEsc(t)}</span>`;
 }
+function lgOn(e){ return !(e.off && e.type==='지출' && lgCfg().offMode!==false); }
 function lgTotals(list){
-  let inc=0, exp=0, sav=0, ni=0, ne=0, ns=0;
+  let inc=0, exp=0, sav=0, ni=0, ne=0, ns=0, offN=0, offAmt=0;
   list.forEach(e=>{
+    if(!lgOn(e)){ offN++; offAmt+=e.amount; return; }
     if(e.type==='수입'){ inc+=e.amount; ni++; }
     else if(e.type==='저축투자상환'){ sav+=e.amount; ns++; }
     else { exp+=e.amount; ne++; }
   });
-  return {inc, exp, sav, net:inc-exp, rest:inc-exp-sav, ni, ne, ns};
+  return {inc, exp, sav, net:inc-exp, rest:inc-exp-sav, ni, ne, ns, offN, offAmt};
 }
 function lgMonthList(ym){ return state.ledger.filter(e=>e.date.slice(0,7)===ym); }
+function lgMonthView(ym){ return lgMonthList(ym).filter(lgOn); }
 
 /* ---------- 필터 ---------- */
 function lgFiltered(){
@@ -2497,6 +2505,9 @@ function lgListHtml(){
     <select onchange="lgSetFilter('category',this.value)">${catOpts}</select>
     <select onchange="lgSetFilter('method',this.value)">${methOpts}</select>
     <select onchange="lgSetFilter('fund',this.value)">${fundOpts}</select>
+    <label class="chk offmode" title="끈 지출을 합계에서 뺍니다"><input type="checkbox" ${cfg.offMode!==false?'checked':''} onchange="lgSetOffMode(this.checked)"> 🔘 꺼둔 지출 합계 제외</label>
+    <button class="ghost" style="padding:5px 10px;font-size:12px;" onclick="lgBulkOn(true)">표시 중 지출 모두 켜기</button>
+    <button class="ghost" style="padding:5px 10px;font-size:12px;" onclick="lgBulkOn(false)">모두 끄기</button>
     <label class="chk"><input type="checkbox" ${f.fixedOnly?'checked':''} onchange="lgSetFilter('fixedOnly',this.checked)"> 📌 고정비만</label>
     <input type="search" placeholder="세부내역 검색" value="${lgEsc(f.q)}" oninput="lgSetFilter('q',this.value)">
   </div>
@@ -2516,25 +2527,39 @@ function updateLedgerTable(){
     <div class="c"><div class="l">지출</div><div class="v tabular">${fmtMoney(t.exp,'KRW')}</div></div>
     <div class="c"><div class="l">잔액</div><div class="v tabular" style="color:${t.net<0?'var(--up-fg)':'var(--ink)'};">${fmtMoney(t.net,'KRW')}</div></div>
     <div class="c"><div class="l">저축·투자·상환</div><div class="v tabular amt-sav">${fmtMoney(t.sav,'KRW')}</div></div>
-    <div class="c"><div class="l">표시 중</div><div class="v tabular">${list.length}건</div></div>`;
+    <div class="c"><div class="l">표시 중</div><div class="v tabular">${list.length}건</div></div>`
+    + (t.offN ? `<div class="c" style="border-style:dashed;"><div class="l">⏸ 합계에서 제외</div><div class="v tabular" style="color:var(--ink-soft);">${t.offN}건 · ${fmtMoney(t.offAmt,'KRW')}</div></div>` : '');
   if(!list.length){
     wrap.innerHTML = `<div style="text-align:center;padding:34px 16px;color:var(--ink-soft);font-size:13px;">조건에 맞는 내역이 없어요.<br><button class="primary" style="margin-top:12px;" onclick="openEntryModal(null)">+ 새로 만들기</button></div>`;
     return;
   }
   const shown = list.slice(0,500);
-  const rows = shown.map(e=>`<tr>
+  const rows = shown.map(e=>`<tr class="${lgOn(e)?'':'off'}">
     <td class="lg-title" onclick="openEntryModal('${e.id}')">${lgEsc(e.title)}${e.memo?`<div class="lg-memo">${lgEsc(e.memo)}</div>`:''}</td>
     <td style="white-space:nowrap;color:var(--ink-soft);">${e.date.replace(/-/g,'/')} <span style="font-size:11px;">(${lgDow(e.date)})</span></td>
     <td class="num ${lgAmtCls(e)}">${lgAmtStr(e)}</td>
     <td style="white-space:nowrap;">${lgEsc(lgCatLabel(e.category))}</td>
     <td>${lgMethodTag(e.method)}</td>
     <td>${e.type==='지출' ? lgFundTag(e.fundSource) : ''}</td>
+    <td style="text-align:center;">${e.type==='지출' ? `<input type="checkbox" title="합계에 포함" ${e.off?'':'checked'} onchange="lgToggleOn('${e.id}',this.checked)">` : ''}</td>
     <td style="text-align:center;"><input type="checkbox" ${e.fixed?'checked':''} onchange="lgToggleFixed('${e.id}',this.checked)"></td>
     <td>${lgTypeTag(e.type)}</td>
     <td><button class="row-del" style="color:var(--ink-soft);" onclick="openEntryModal('${e.id}')">✎</button></td>
   </tr>`).join('');
-  wrap.innerHTML = `<table class="lg"><thead><tr><th>세부내역</th><th>날짜</th><th class="num">금액</th><th>카테고리</th><th>수단</th><th>자금</th><th style="text-align:center;">고정비</th><th>구분</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+  wrap.innerHTML = `<table class="lg"><thead><tr><th>세부내역</th><th>날짜</th><th class="num">금액</th><th>카테고리</th><th>수단</th><th>자금</th><th style="text-align:center;">합계</th><th style="text-align:center;">고정비</th><th>구분</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
     + (list.length>500 ? `<div style="padding:10px 14px;font-size:12px;color:var(--ink-soft);">최근 500건만 표시했어요. 필터로 범위를 좁혀주세요.</div>` : '');
+}
+function lgToggleOn(id, v){
+  const e = state.ledger.find(x=>x.id===id); if(!e) return;
+  if(v) delete e.off; else e.off = true;
+  e.updatedAt = nowISO(); saveState(); updateLedgerTable();
+  toast(v ? '합계에 포함했어요' : '합계에서 뺐어요 (목록에는 남아있어요)');
+}
+function lgSetOffMode(v){ lgCfg().offMode = !!v; saveState(); updateLedgerTable(); toast(v ? '꺼둔 지출을 합계에서 뺐어요' : '모든 지출을 합계에 포함해요'); }
+function lgBulkOn(v){
+  const list = lgFiltered().filter(e=>e.type==='지출'); if(!list.length){ toast('표시 중인 지출이 없어요'); return; }
+  list.forEach(e=>{ if(v) delete e.off; else e.off = true; e.updatedAt = nowISO(); });
+  saveState(); updateLedgerTable(); toast(`지출 ${list.length}건을 ${v?'켰어요':'껐어요'}`);
 }
 function lgToggleFixed(id, v){
   const e = state.ledger.find(x=>x.id===id); if(!e) return;
@@ -2566,7 +2591,7 @@ function periodColumn(list, type, label){
 }
 function lgPeriodHtml(){
   const range = periodParse(periodQuery);
-  const list = range ? state.ledger.filter(e=>{ const m = e.date.slice(0,7); return m>=range.from && m<=range.to; }) : [];
+  const list = range ? state.ledger.filter(lgOn).filter(e=>{ const m = e.date.slice(0,7); return m>=range.from && m<=range.to; }) : [];
   return `
   <div class="lg-card">
     <h3>⚙️ 설정</h3>
@@ -2902,7 +2927,7 @@ function lgBreakdownCard(title, list, prevList, keyFn, labelFn, color, kind){
 }
 function lgSummaryHtml(){
   const ym = ledgerMonth;
-  const list = lgMonthList(ym); const prevList = lgMonthList(prevYM(ym));
+  const list = lgMonthView(ym); const prevList = lgMonthView(prevYM(ym));
   if(!list.length){
     return `<div class="empty"><div class="big">🧾</div><div class="msg">${lgYmLong(ym)} 내역이 아직 없어요</div><div class="sub">"+ 새로 만들기"로 첫 내역을 기록해보세요.</div></div>`;
   }
@@ -2946,7 +2971,7 @@ function lgSummaryHtml(){
 
   const trendRows = [];
   for(let i=5;i>=0;i--){
-    const m = ymFromAbs(ymToAbs(ym)-i); const tt = lgTotals(lgMonthList(m));
+    const m = ymFromAbs(ymToAbs(ym)-i); const tt = lgTotals(lgMonthView(m));
     const rate = tt.inc ? tt.net/tt.inc*100 : null;
     trendRows.push(`<tr${m===ym?' style="background:rgba(76,111,255,0.07);"':''}>
       <td style="font-weight:${m===ym?800:600};white-space:nowrap;cursor:pointer;" onclick="ledgerMonth='${m}';renderLedger();">${lgYmLong(m)}</td>
@@ -2965,7 +2990,7 @@ function lgDailyHtml(){
   const ym = ledgerMonth; const p = ym.split('-').map(Number);
   const ws = lgWeekStart();
   const first = new Date(p[0], p[1]-1, 1); const lead = (first.getDay()-ws+7)%7; const dim = lgDim(ym);
-  const list = lgMonthList(ym);
+  const list = lgMonthView(ym);
   const byDay = {};
   list.forEach(e=>{ const o = byDay[e.date] || (byDay[e.date] = {inc:0, exp:0, sav:0, n:0}); if(e.type==='수입') o.inc += e.amount; else if(e.type==='저축투자상환') o.sav += e.amount; else o.exp += e.amount; o.n++; });
   const today = todayISODate();
@@ -3031,7 +3056,7 @@ function lgPivotDim(e, dim){
 }
 function lgPivotData(){
   const p = lgCfg().pivot;
-  let list = lgPeriodFilter(state.ledger, p.period);
+  let list = lgPeriodFilter(state.ledger.filter(lgOn), p.period);
   if(p.type==='지출' || p.type==='수입' || p.type==='저축투자상환') list = list.filter(e=>e.type===p.type);
   if(p.type==='순수익') list = list.filter(e=>e.type!=='저축투자상환');
   const rowDim = p.row; const colDim = (p.col===p.row) ? '없음' : p.col;
@@ -3247,6 +3272,7 @@ function openEntryModal(id, presetDate, presetCat){
         </div>
         <div class="field full"><label>메모 <span style="font-weight:400;color:var(--ink-faint);">(선택)</span></label><textarea id="en-memo" placeholder="추가로 남기고 싶은 내용" style="width:100%;min-height:60px;padding:9px 11px;border:1px solid var(--border);border-radius:12px;font-size:13.5px;font-family:'Pretendard',sans-serif;background:var(--bg);color:var(--ink);resize:vertical;">${e&&e.memo?lgEsc(e.memo):''}</textarea></div>
         <div class="field full" style="margin:-4px 0 0;"><a href="#" onclick="lgOpenSettings();return false;" style="font-size:12px;font-weight:700;color:var(--indigo);text-decoration:none;">⚙️ 카테고리 · 수단 수정/삭제하러 가기 ›</a></div>
+        <div class="field full" id="en-on-wrap"><label class="chk" style="font-size:13px;font-weight:600;color:var(--ink);"><input type="checkbox" id="en-on" ${e&&e.off?'':'checked'} style="width:auto;"> 🔘 지출 합계에 포함 <span style="font-weight:400;color:var(--ink-faint);">(끄면 합계·대시보드에서 빠져요)</span></label></div>
         <div class="field full"><label class="chk" style="font-size:13px;font-weight:600;color:var(--ink);"><input type="checkbox" id="en-fixed" ${e&&e.fixed?'checked':''} style="width:auto;"> 📌 고정비 (매달 반복되는 지출)</label></div>
       </div>
       <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;">
@@ -3288,9 +3314,11 @@ function lgSaveEntry(keepAdding){
   const data = {date, title, amount:Math.abs(amount), type:entryModalType, category, method, fixed, memo};
   if(fundSource) data.fundSource = fundSource;
   if(ev) data.ev = ev;
+  const onEl = document.getElementById('en-on'); const wantOff = isExp && onEl && !onEl.checked;
+  if(wantOff) data.off = true;
   if(editingEntryId){
     const ex = state.ledger.find(x=>x.id===editingEntryId);
-    if(ex){ Object.assign(ex, data, {updatedAt:nowISO()}); if(!fundSource) delete ex.fundSource; if(!ev) delete ex.ev; }
+    if(ex){ Object.assign(ex, data, {updatedAt:nowISO()}); if(!fundSource) delete ex.fundSource; if(!ev) delete ex.ev; if(!wantOff) delete ex.off; }
   } else {
     state.ledger.push(Object.assign({id:uid(), createdAt:nowISO(), updatedAt:nowISO()}, data));
   }
@@ -3510,6 +3538,7 @@ function lgImportCSVText(text){
   const iRel = find(['관계','나와의 관계','Relation']);
   const iTarget = find(['대상자','Target']);
   const iKind = find(['경조사구분','경조사 구분','Event']);
+  const iOff = find(['합계제외','Excluded']);
   if(iDate<0 || iAmt<0){ lgImportMsg = '날짜/금액 열을 찾지 못했어요.\n인식된 열: '+header.join(', '); toast('열을 찾지 못했어요'); renderLedger(); return; }
   takeSnapshot('CSV 가져오기 전');
   const cfg = lgCfg();
@@ -3540,6 +3569,7 @@ function lgImportCSVText(text){
     const item = {id:uid(), date, title, amount, type, category, method, fixed, memo, createdAt:nowISO(), updatedAt:nowISO()};
     if(fundSource) item.fundSource = fundSource;
     if(ev) item.ev = ev;
+    if(type==='지출' && iOff>=0 && /^(yes|true|y|1|예)$/i.test(String(r[iOff]||'').trim())) item.off = true;
     state.ledger.push(item);
     added++;
   });
@@ -3554,9 +3584,9 @@ function lgImportFile(input){
 }
 function lgCSVString(){
   const cell = v => '"'+String(v==null?'':v).replace(/"/g,'""')+'"';
-  const rows = [['세부내역','날짜','금액','카테고리','수단','고정비','구분','메모','자금출처','지인','관계','대상자','경조사구분']];
+  const rows = [['세부내역','날짜','금액','카테고리','수단','고정비','구분','메모','자금출처','지인','관계','대상자','경조사구분','합계제외']];
   state.ledger.slice().sort((a,b)=>a.date.localeCompare(b.date) || (a.createdAt||'').localeCompare(b.createdAt||''))
-    .forEach(e=>rows.push([e.title, e.date, e.amount, e.category||'', e.method||'', e.fixed?'Yes':'No', e.type, e.memo||'', e.fundSource?lgFundLabel(e.fundSource):'', e.ev?e.ev.person||'':'', e.ev?e.ev.relation||'':'', e.ev?e.ev.target||'':'', e.ev?e.ev.kind||'':'']));
+    .forEach(e=>rows.push([e.title, e.date, e.amount, e.category||'', e.method||'', e.fixed?'Yes':'No', e.type, e.memo||'', e.fundSource?lgFundLabel(e.fundSource):'', e.ev?e.ev.person||'':'', e.ev?e.ev.relation||'':'', e.ev?e.ev.target||'':'', e.ev?e.ev.kind||'':'', e.off?'Yes':'']));
   return rows.map(r=>r.map(cell).join(',')).join('\n');
 }
 function lgExportCSV(){
@@ -3572,7 +3602,7 @@ function lgShowCSV(){
 
 /* ---------- 대시보드 연동 카드 ---------- */
 function ledgerMiniCard(){
-  const ym = todayYM(); const t = lgTotals(lgMonthList(ym));
+  const ym = todayYM(); const t = lgTotals(lgMonthView(ym));
   return `<div class="stat-card clickable" onclick="lgGoto('${ym}')">
     <div class="label"><span class="dot" style="background:var(--indigo);"></span>이번 달 가계부 잔액</div>
     <div class="value tabular" style="color:${t.net<0?'var(--up-fg)':'var(--ink)'};">${fmtMoney(t.net,'KRW')}</div>
@@ -3891,7 +3921,7 @@ function dashMonthShift(d){ dashMonth = ymFromAbs(ymToAbs(dashMonth)+d); renderD
 function dashMonthToday(){ dashMonth = todayYM(); renderDashboard(); }
 function dashSetTab(t){ dashTab = t; renderDashboard(); }
 function dashBuildSlices(){
-  const list = lgMonthList(dashMonth).filter(e=>e.type===dashTab);
+  const list = lgMonthView(dashMonth).filter(e=>e.type===dashTab);
   const rows = lgBreakdown(list, e=>e.category||'미분류');
   const total = rows.reduce((t,r)=>t+r.amt,0);
   const top = rows.slice(0,8), rest = rows.slice(8);
@@ -3945,11 +3975,11 @@ function dashDonutSvg(slices, total){
 }
 function dashDrill(i){
   const sl = dashSlices[i]; if(!sl) return;
-  const list = lgMonthList(dashMonth).filter(e=>e.type===dashTab && sl.cats.includes(e.category||'미분류')).sort((a,b)=>b.date.localeCompare(a.date));
+  const list = lgMonthView(dashMonth).filter(e=>e.type===dashTab && sl.cats.includes(e.category||'미분류')).sort((a,b)=>b.date.localeCompare(a.date));
   lgListModal(sl.name, lgYmLong(dashMonth)+' · '+dashTab, list);
 }
 function dashSummaryTableHtml(){
-  const cur = lgTotals(lgMonthList(dashMonth)), prev = lgTotals(lgMonthList(prevYM(dashMonth)));
+  const cur = lgTotals(lgMonthView(dashMonth)), prev = lgTotals(lgMonthView(prevYM(dashMonth)));
   const row = (label, c, p, kind, cls, bold)=>`<tr><td style="font-weight:${bold?800:600};white-space:nowrap;">${label}</td>
     <td class="num ${cls||''}" style="font-weight:${bold?800:600};">${fmtMoney(c,'KRW')}</td><td class="num" style="color:var(--ink-soft);">${fmtMoney(p,'KRW')}</td><td class="num">${lgDeltaHtml(c,p,kind)}</td></tr>`;
   const ratio = cur.inc ? (cur.sav/cur.inc*100).toFixed(1)+'%' : '-';
@@ -3989,7 +4019,7 @@ function dashMonthlyHtml(){
   const cur = lgDeltaHtml; // (참조용)
   const tabs = DASH_TABS.map(t=>`<button class="tab${t[0]===dashTab?' active':''}" onclick="dashSetTab('${t[0]}')">${t[1]} ${t[0]}</button>`).join('');
   const legend = d.slices.length ? `<div class="dn-legend">${d.slices.map((sl,i)=>`<span style="cursor:pointer;" onclick="dashDrill(${i})"><i style="background:${sl.color};"></i>${lgEsc(sl.name)}</span>`).join('')}</div>` : '';
-  const prevList = lgMonthList(prevYM(dashMonth)).filter(e=>e.type===dashTab);
+  const prevList = lgMonthView(prevYM(dashMonth)).filter(e=>e.type===dashTab);
   const prevMap = new Map(); lgBreakdown(prevList, e=>e.category||'미분류').forEach(r=>prevMap.set(r.key, r.amt));
   const kind = dashTab==='지출' ? 'exp' : 'inc';
   let table;
