@@ -262,6 +262,7 @@ input[type=file]{display:none;}
 .seg.big button{flex:1;padding:10px;font-size:14px;}
 .seg.big button.active.t-exp{color:#E03131;}
 .seg.big button.active.t-inc{color:#0CA678;}
+.lg tr.pend td{background:rgba(120,120,160,.07);font-style:italic;color:var(--ink-soft);cursor:default;}
 .lg tr.off td{opacity:.45;}
 .lg tr.off td.num{text-decoration:line-through;}
 .lg tr.off td:nth-child(7){opacity:1;}
@@ -2508,6 +2509,7 @@ function lgListHtml(){
     <label class="chk offmode" title="끈 지출을 합계에서 뺍니다"><input type="checkbox" ${cfg.offMode!==false?'checked':''} onchange="lgSetOffMode(this.checked)"> 🔘 꺼둔 지출 합계 제외</label>
     <button class="ghost" style="padding:5px 10px;font-size:12px;" onclick="lgBulkOn(true)">표시 중 지출 모두 켜기</button>
     <button class="ghost" style="padding:5px 10px;font-size:12px;" onclick="lgBulkOn(false)">모두 끄기</button>
+    <label class="chk"><input type="checkbox" ${cfg.showPend!==false?'checked':''} onchange="lgSetShowPend(this.checked)"> ⏳ 예정 할부 보기</label>
     <label class="chk"><input type="checkbox" ${f.fixedOnly?'checked':''} onchange="lgSetFilter('fixedOnly',this.checked)"> 📌 고정비만</label>
     <input type="search" placeholder="세부내역 검색" value="${lgEsc(f.q)}" oninput="lgSetFilter('q',this.value)">
   </div>
@@ -2522,19 +2524,29 @@ function lgSetFilter(key, val){
 function updateLedgerTable(){
   const wrap = document.getElementById('lg-table-wrap'); if(!wrap) return;
   const list = lgFiltered(); const t = lgTotals(list);
+  const pend = lgPendingInst(); const pendAmt = pend.reduce((a,e)=>a+e.amount,0);
   document.getElementById('lg-list-summary').innerHTML = `
     <div class="c"><div class="l">수입</div><div class="v tabular amt-inc">${fmtMoney(t.inc,'KRW')}</div></div>
     <div class="c"><div class="l">지출</div><div class="v tabular">${fmtMoney(t.exp,'KRW')}</div></div>
     <div class="c"><div class="l">잔액</div><div class="v tabular" style="color:${t.net<0?'var(--up-fg)':'var(--ink)'};">${fmtMoney(t.net,'KRW')}</div></div>
     <div class="c"><div class="l">저축·투자·상환</div><div class="v tabular amt-sav">${fmtMoney(t.sav,'KRW')}</div></div>
     <div class="c"><div class="l">표시 중</div><div class="v tabular">${list.length}건</div></div>`
+    + (pend.length ? `<div class="c" style="border-style:dashed;"><div class="l">⏳ 결제 예정 할부</div><div class="v tabular">${pend.length}건 · ${fmtMoney(pendAmt,'KRW')}</div></div><div class="c" style="border-style:dashed;"><div class="l">예상 지출 (지출+예정)</div><div class="v tabular">${fmtMoney(t.exp+pendAmt,'KRW')}</div></div>` : '')
     + (t.offN ? `<div class="c" style="border-style:dashed;"><div class="l">⏸ 합계에서 제외</div><div class="v tabular" style="color:var(--ink-soft);">${t.offN}건 · ${fmtMoney(t.offAmt,'KRW')}</div></div>` : '');
-  if(!list.length){
+  if(!list.length && !pend.length){
     wrap.innerHTML = `<div style="text-align:center;padding:34px 16px;color:var(--ink-soft);font-size:13px;">조건에 맞는 내역이 없어요.<br><button class="primary" style="margin-top:12px;" onclick="openEntryModal(null)">+ 새로 만들기</button></div>`;
     return;
   }
   const shown = list.slice(0,500);
-  const rows = shown.map(e=>`<tr class="${lgOn(e)?'':'off'}">
+  const pendRows = pend.map(e=>`<tr class="pend">
+    <td class="lg-title" onclick="ledgerSub='installments';renderLedger()">${lgEsc(e.title)}<div class="lg-memo">${lgEsc(e.memo)}</div></td>
+    <td style="white-space:nowrap;color:var(--ink-soft);">${e.date.replace(/-/g,'/')} <span style="font-size:11px;">(${lgDow(e.date)})</span></td>
+    <td class="num">${fmtMoney(e.amount,'KRW')}</td>
+    <td style="white-space:nowrap;">${lgEsc(lgCatLabel(e.category))}</td>
+    <td>${lgMethodTag(e.method)}</td><td></td><td></td><td style="text-align:center;">📌</td>
+    <td><span class="tag exp">⏳ 예정</span></td><td></td>
+  </tr>`).join('');
+  const rows = pendRows + shown.map(e=>`<tr class="${lgOn(e)?'':'off'}">
     <td class="lg-title" onclick="openEntryModal('${e.id}')">${lgEsc(e.title)}${e.memo?`<div class="lg-memo">${lgEsc(e.memo)}</div>`:''}</td>
     <td style="white-space:nowrap;color:var(--ink-soft);">${e.date.replace(/-/g,'/')} <span style="font-size:11px;">(${lgDow(e.date)})</span></td>
     <td class="num ${lgAmtCls(e)}">${lgAmtStr(e)}</td>
@@ -2549,6 +2561,28 @@ function updateLedgerTable(){
   wrap.innerHTML = `<table class="lg"><thead><tr><th>세부내역</th><th>날짜</th><th class="num">금액</th><th>카테고리</th><th>수단</th><th>자금</th><th style="text-align:center;">합계</th><th style="text-align:center;">고정비</th><th>구분</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
     + (list.length>500 ? `<div style="padding:10px 14px;font-size:12px;color:var(--ink-soft);">최근 500건만 표시했어요. 필터로 범위를 좁혀주세요.</div>` : '');
 }
+/* 아직 결제일이 안 된 할부 회차 (가계부에 기록되기 전) */
+function lgPendingInst(){
+  const cfg = lgCfg(); if(cfg.showPend===false) return [];
+  const f = ledgerFilter; if(f.period==='all' || f.fund || (f.type && f.type!=='지출')) return [];
+  const today = todayISODate(); const out = [];
+  (state.installments||[]).forEach(inst=>{
+    const gen = inst.generated||[];
+    instSchedule(inst).forEach(r=>{
+      if(r.date<=today || gen.includes(r.idx)) return;
+      if(state.ledger.some(e=>e.id==='inst_'+inst.id+'_'+r.idx)) return;
+      const row = Object.assign({id:'', pend:true, type:'지출', fixed:true, instId:inst.id}, instRow(inst, r));
+      if(f.period==='month' && row.date.slice(0,7)!==ledgerMonth) return;
+      if(f.period==='week'){ const w = lgWeekRange(); if(row.date<w[0] || row.date>w[1]) return; }
+      if(f.category && (row.category||'미분류')!==f.category) return;
+      if(f.method && (row.method||'')!==f.method) return;
+      if(f.q && !(row.title||'').toLowerCase().includes(f.q.toLowerCase())) return;
+      out.push(row);
+    });
+  });
+  return out.sort((a,b)=>a.date.localeCompare(b.date));
+}
+function lgSetShowPend(v){ lgCfg().showPend = !!v; saveState(); updateLedgerTable(); }
 function lgToggleOn(id, v){
   const e = state.ledger.find(x=>x.id===id); if(!e) return;
   if(v) delete e.off; else e.off = true;
